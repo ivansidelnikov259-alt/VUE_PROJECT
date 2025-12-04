@@ -4,7 +4,7 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
-  base: '/color-palette-generator/',
+  base: '/VUE_PROJECT/',
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
