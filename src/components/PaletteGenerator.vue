@@ -39,58 +39,79 @@
       
       <div class="control-group">
         <label>Тип палитры:</label>
-        <select v-model="paletteType" class="select">
+        <select v-model="paletteType" @change="handlePaletteTypeChange" class="select">
           <option value="harmonious">Гармоничная</option>
           <option value="monochromatic">Монохромная</option>
+          <option value="analogous">Аналогичная</option>
+          <option value="triadic">Триада</option>
+          <option value="complementary">Комплементарная</option>
+          <option value="mood">По настроению</option>
         </select>
       </div>
       
-      <button @click="generatePalette" class="generate-btn">
-        🎲 Случайная палитра
-      </button>
+      <!-- Переключатель базового цвета (показывается для всех типов) -->
+      <div class="control-group toggle-group">
+        <label class="toggle-label">
+          <input 
+            type="checkbox" 
+            v-model="useBaseColor" 
+            @change="handleBaseColorToggle"
+            class="toggle-checkbox"
+          />
+          <span class="toggle-slider"></span>
+          Использовать базовый цвет
+        </label>
+      </div>
       
-      <button @click="saveCurrentPalette" class="save-btn">
-        💾 Сохранить палитру
-      </button>
+      <!-- Выбор базового цвета (показывается при включенном переключателе) -->
+      <div class="control-group" v-if="useBaseColor">
+        <label>Базовый цвет:</label>
+        <div class="base-color-picker">
+          <input type="color" v-model="baseColor" @change="generatePalette" />
+          <input type="text" v-model="baseColor" class="color-text" @change="generatePalette" />
+          <button @click="generateRandomBaseColor" class="random-color-btn" title="Случайный цвет">
+            🎲
+          </button>
+        </div>
+      </div>
+      
+      <!-- Выбор настроения (только для типа "mood") -->
+      <div class="control-group" v-if="paletteType === 'mood'">
+        <label>Настроение:</label>
+        <select v-model="selectedMood" class="select" @change="generatePalette">
+          <option value="calm">Спокойные</option>
+          <option value="energetic">Энергичные</option>
+          <option value="professional">Профессиональные</option>
+          <option value="creative">Креативные</option>
+          <option value="random">Случайное</option>
+        </select>
+      </div>
+      
+      <div class="action-buttons">
+        <button @click="generatePalette" class="generate-btn">
+          🎲 {{ useBaseColor ? 'Создать палитру' : 'Случайная палитра' }}
+        </button>
+        
+        <button @click="saveCurrentPalette" class="save-btn">
+          💾 Сохранить палитру
+        </button>
+      </div>
     </div>
     
     <!-- Палитра -->
     <div class="palette-container">
-      <div 
+      <ColorCard
         v-for="(color, index) in colors" 
         :key="index"
-        class="color-card"
-        :style="{ backgroundColor: color }"
+        :color="color"
+        :format="format"
+        :show-pin="true"
+        :is-pinned="pinnedColors.includes(color)"
+        :show-contrast="false"
         @click="copyColor(color, index)"
-      >
-        <div class="color-info">
-          <div class="color-value">
-            {{ format === 'hex' ? color : hexToRgbString(color) }}
-          </div>
-          <div class="color-actions">
-            <button 
-              @click.stop="togglePinColor(color)"
-              :class="{ pinned: pinnedColors.includes(color) }"
-              class="pin-btn"
-              :title="pinnedColors.includes(color) ? 'Открепить' : 'Закрепить'"
-            >
-              📌
-            </button>
-            <button 
-              @click.stop="copyColor(color, index)"
-              class="copy-btn"
-              title="Скопировать"
-            >
-              📋
-            </button>
-          </div>
-        </div>
-        
-        <!-- Индикатор копирования -->
-        <div v-if="copiedIndex === index" class="copied-notification">
-          Скопировано!
-        </div>
-      </div>
+        @toggle-pin="togglePinColor(color)"
+        @copy="copyColor(color, index)"
+      />
     </div>
     
     <!-- Статус -->
@@ -100,6 +121,9 @@
         Сохраненных палитр: {{ savedPalettes.length }}
       </p>
       <p>Текущая тема: {{ isDarkTheme ? '🌙 Тёмная' : '☀️ Светлая' }}</p>
+      <p>Тип палитры: {{ getPaletteTypeName(paletteType) }}</p>
+      <p v-if="useBaseColor">Базовый цвет: {{ baseColor }}</p>
+      <p v-if="paletteType === 'mood'">Настроение: {{ getMoodName(selectedMood) }}</p>
     </div>
     
     <!-- Mockup превью -->
@@ -142,17 +166,27 @@
 </template>
 
 <script>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useColorPalette } from '../composables/useColorPalette'
-import { hexToRgb, getContrastRatio } from '../utils/colorUtils'
+import { hexToRgb, getContrastRatio, generateRandomColor } from '../utils/colorUtils'
+import { 
+  generateHarmoniousPalette, 
+  generateMonochromatic,
+  generateAnalogousPalette,
+  generateTriadicPalette,
+  generateComplementaryPalette,
+  generateMoodPalette
+} from '../utils/colorUtils'
 import ContrastChecker from './ContrastChecker.vue'
+import ColorCard from './ColorCard.vue'
 import { useTheme } from '../composables/useTheme'
 
 export default {
   name: 'PaletteGenerator',
   
   components: {
-    ContrastChecker
+    ContrastChecker,
+    ColorCard
   },
   
   setup() {
@@ -162,7 +196,7 @@ export default {
       colorCount,
       format,
       savedPalettes,
-      generatePalette,
+      generatePalette: baseGeneratePalette,
       copyToClipboard,
       togglePinColor,
       savePalette
@@ -172,6 +206,9 @@ export default {
     
     const copiedIndex = ref(-1)
     const paletteType = ref('harmonious')
+    const selectedMood = ref('calm')
+    const baseColor = ref('#667eea')
+    const useBaseColor = ref(false)
     
     // Преобразование HEX в RGB строку
     const hexToRgbString = (hex) => {
@@ -211,10 +248,142 @@ export default {
       }
     }
     
-    // Генерация палитры с учетом типа
-    const generatePaletteWithType = () => {
-      generatePalette(paletteType.value)
+    // Обработка изменения типа палитры
+    const handlePaletteTypeChange = () => {
+      generatePalette()
     }
+    
+    // Обработка переключения базового цвета
+    const handleBaseColorToggle = () => {
+      if (useBaseColor.value && !baseColor.value) {
+        baseColor.value = '#667eea'
+      }
+      generatePalette()
+    }
+    
+    // Генерация случайного базового цвета
+    const generateRandomBaseColor = () => {
+      baseColor.value = generateRandomColor()
+      generatePalette()
+    }
+    
+    // Получение читаемого имени типа палитры
+    const getPaletteTypeName = (type) => {
+      const names = {
+        harmonious: 'Гармоничная',
+        monochromatic: 'Монохромная',
+        analogous: 'Аналогичная',
+        triadic: 'Триада',
+        complementary: 'Комплементарная',
+        mood: 'По настроению'
+      }
+      return names[type] || type
+    }
+    
+    // Получение читаемого имени настроения
+    const getMoodName = (mood) => {
+      const names = {
+        calm: 'Спокойные',
+        energetic: 'Энергичные',
+        professional: 'Профессиональные',
+        creative: 'Креативные',
+        random: 'Случайное'
+      }
+      return names[mood] || mood
+    }
+    
+    // Генерация палитры с учетом типа
+    const generatePalette = () => {
+      let newColors
+      
+      if (useBaseColor.value && paletteType.value !== 'mood') {
+        // Генерация на основе базового цвета
+        switch(paletteType.value) {
+          case 'monochromatic':
+            newColors = generateMonochromatic(baseColor.value, colorCount.value)
+            break
+            
+          case 'analogous':
+            newColors = generateAnalogousPalette(baseColor.value, colorCount.value)
+            break
+            
+          case 'triadic':
+            newColors = generateTriadicPalette(baseColor.value, colorCount.value)
+            break
+            
+          case 'complementary':
+            newColors = generateComplementaryPalette(baseColor.value, colorCount.value)
+            break
+            
+          default: // harmonious
+            newColors = generateHarmoniousPalette(colorCount.value, baseColor.value)
+            break
+        }
+      } else if (paletteType.value === 'mood') {
+        // Генерация по настроению
+        const mood = selectedMood.value === 'random' 
+          ? ['calm', 'energetic', 'professional', 'creative'][Math.floor(Math.random() * 4)]
+          : selectedMood.value
+        newColors = generateMoodPalette(mood, colorCount.value)
+      } else {
+        // Случайная генерация без базового цвета
+        newColors = generateHarmoniousPalette(colorCount.value)
+      }
+      
+      // Сохраняем закрепленные цвета
+      if (pinnedColors.value.length > 0) {
+        pinnedColors.value.forEach((pinnedColor, index) => {
+          if (index < newColors.length) {
+            newColors[index] = pinnedColor
+          }
+        })
+      }
+      
+      colors.value = newColors
+      
+      // Сохраняем настройки в localStorage
+      saveSettings()
+    }
+    
+    // Сохранение настроек
+    const saveSettings = () => {
+      try {
+        localStorage.setItem('currentPalette', JSON.stringify(colors.value))
+        localStorage.setItem('paletteType', paletteType.value)
+        localStorage.setItem('useBaseColor', useBaseColor.value.toString())
+        localStorage.setItem('baseColor', baseColor.value)
+        if (paletteType.value === 'mood') {
+          localStorage.setItem('selectedMood', selectedMood.value)
+        }
+      } catch (error) {
+        console.error('Error saving settings:', error)
+      }
+    }
+    
+    // Загрузка сохраненных настроек
+    const loadSettings = () => {
+      try {
+        const savedType = localStorage.getItem('paletteType')
+        if (savedType) paletteType.value = savedType
+        
+        const savedUseBaseColor = localStorage.getItem('useBaseColor')
+        if (savedUseBaseColor !== null) useBaseColor.value = savedUseBaseColor === 'true'
+        
+        const savedBaseColor = localStorage.getItem('baseColor')
+        if (savedBaseColor) baseColor.value = savedBaseColor
+        
+        const savedMood = localStorage.getItem('selectedMood')
+        if (savedMood) selectedMood.value = savedMood
+      } catch (error) {
+        console.error('Error loading settings:', error)
+      }
+    }
+    
+    // Загружаем настройки при инициализации
+    onMounted(() => {
+      loadSettings()
+      generatePalette()
+    })
     
     return {
       colors,
@@ -225,12 +394,20 @@ export default {
       isDarkTheme,
       copiedIndex,
       paletteType,
-      generatePalette: generatePaletteWithType,
+      selectedMood,
+      baseColor,
+      useBaseColor,
+      generatePalette,
       copyColor,
       togglePinColor,
       hexToRgbString,
       getContrastColor,
-      saveCurrentPalette
+      saveCurrentPalette,
+      handlePaletteTypeChange,
+      handleBaseColorToggle,
+      generateRandomBaseColor,
+      getPaletteTypeName,
+      getMoodName
     }
   }
 }
@@ -262,7 +439,7 @@ export default {
   gap: 20px;
   margin-bottom: 30px;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   background: var(--bg-tertiary);
   padding: 20px;
   border-radius: 10px;
@@ -273,11 +450,60 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 200px;
 }
 
 .control-group label {
   color: var(--text-primary);
   font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.toggle-group {
+  margin-top: 8px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.toggle-checkbox {
+  display: none;
+}
+
+.toggle-slider {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+  background-color: var(--border-color);
+  border-radius: 20px;
+  transition: background-color 0.3s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background-color: white;
+  transition: transform 0.3s;
+}
+
+.toggle-checkbox:checked + .toggle-slider {
+  background-color: var(--primary);
+}
+
+.toggle-checkbox:checked + .toggle-slider::before {
+  transform: translateX(20px);
 }
 
 .select {
@@ -287,7 +513,7 @@ export default {
   background: var(--input-bg);
   color: var(--text-primary);
   cursor: pointer;
-  min-width: 120px;
+  min-width: 160px;
 }
 
 .select:focus {
@@ -308,6 +534,7 @@ export default {
   cursor: pointer;
   transition: all 0.3s;
   border-radius: 5px;
+  flex: 1;
 }
 
 .format-btn:hover {
@@ -320,13 +547,63 @@ export default {
   border-color: var(--button-primary-bg);
 }
 
+.base-color-picker {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.base-color-picker input[type="color"] {
+  width: 50px;
+  height: 40px;
+  border: 2px solid var(--border-color);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.color-text {
+  padding: 8px 12px;
+  border: 2px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  min-width: 120px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+}
+
+.random-color-btn {
+  padding: 8px 12px;
+  border: 2px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.3s;
+}
+
+.random-color-btn:hover {
+  background: var(--bg-tertiary);
+  transform: scale(1.05);
+}
+
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+}
+
 .generate-btn, .save-btn {
-  padding: 10px 20px;
+  padding: 12px 24px;
   border: none;
   border-radius: 5px;
   cursor: pointer;
   font-weight: bold;
   transition: transform 0.3s, opacity 0.3s;
+  font-size: 0.95rem;
+  min-width: 180px;
 }
 
 .generate-btn {
@@ -352,98 +629,24 @@ export default {
   justify-content: center;
 }
 
-.color-card {
-  flex: 1;
-  min-width: 180px;
-  height: 200px;
-  border-radius: 10px;
-  position: relative;
-  overflow: hidden;
-  cursor: pointer;
-  transition: transform 0.3s, box-shadow 0.3s;
-  box-shadow: 0 4px 6px var(--shadow-color);
-}
-
-.color-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 8px 12px var(--shadow-color);
-}
-
-.color-info {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 15px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.color-value {
-  font-family: 'Courier New', monospace;
-  font-size: 14px;
-  user-select: all;
-  font-weight: 500;
-}
-
-.color-actions {
-  display: flex;
-  gap: 5px;
-}
-
-.pin-btn, .copy-btn {
-  background: none;
-  border: none;
-  color: white;
-  cursor: pointer;
-  font-size: 16px;
-  padding: 5px;
-  transition: transform 0.2s;
-}
-
-.pin-btn:hover, .copy-btn:hover {
-  transform: scale(1.1);
-}
-
-.pin-btn.pinned {
-  color: #ffd700;
-}
-
-.copied-notification {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background: var(--button-success-bg);
-  color: white;
-  padding: 5px 10px;
-  border-radius: 5px;
-  font-size: 12px;
-  animation: fadeInOut 2s;
-  z-index: 10;
-}
-
-@keyframes fadeInOut {
-  0%, 100% { opacity: 0; }
-  50% { opacity: 1; }
-}
-
 .status {
   background: var(--bg-tertiary);
-  padding: 15px;
+  padding: 15px 20px;
   border-radius: 5px;
   margin-bottom: 30px;
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
   border: 1px solid var(--border-color);
+  font-size: 0.9rem;
 }
 
 .status p {
   color: var(--text-primary);
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .mockup-preview {
@@ -523,6 +726,7 @@ export default {
   
   .control-group {
     width: 100%;
+    min-width: unset;
   }
   
   .select, .format-btn, .generate-btn, .save-btn {
@@ -533,13 +737,13 @@ export default {
     width: 100%;
   }
   
-  .format-btn {
-    flex: 1;
+  .action-buttons {
+    width: 100%;
   }
   
-  .color-card {
-    min-width: 150px;
-    height: 180px;
+  .base-color-picker {
+    width: 100%;
+    justify-content: flex-start;
   }
   
   .status {
@@ -549,17 +753,12 @@ export default {
 }
 
 @media (max-width: 480px) {
-  .color-card {
-    min-width: 100%;
-    height: 160px;
-  }
-  
-  .color-value {
-    font-size: 12px;
-  }
-  
   .palette-container {
     gap: 8px;
+  }
+  
+  .color-text {
+    min-width: 100px;
   }
 }
 </style>
